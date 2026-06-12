@@ -1,0 +1,167 @@
+% !TEX program = xelatex
+\documentclass[12pt,a4paper]{ctexart}
+
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{geometry}
+\geometry{margin=2.5cm}
+
+\title{钱学森问题的扩展求解 \\
+\large 含月球借力与发射窗口优化的绕日返回轨道设计}
+\author{（你的学号 / 姓名）}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+本项目在钱学森《星际航行概论》（2008 版）第5--6 章拼接圆锥曲线理论基础上，
+扩展求解含月球借力与发射窗口优化的绕日返回轨道。
+借助 JPL Horizons 真实历表数据与现代数值方法（Velocity-Verlet 积分器、
+网格扫描优化），在 2026 年一年周期内搜索使总速度增量最小的发射窗口。
+\end{abstract}
+
+\tableofcontents
+
+% ============================================
+\section{理论基础}
+% ============================================
+
+\subsection{拼接圆锥曲线法}
+
+钱学森在《星际航行概论》第5--6 章建立了行星际轨道设计的拼接圆锥曲线理论框架。
+本项目的日心转移椭圆沿用该理论，核心公式如下。
+
+\subsection{日心椭圆轨道}
+
+给定近日距 $r_p$ 和地球轨道半径 $r_1$（取 1 AU），椭圆参数为：
+
+\begin{align}
+a &= \frac{r_p + r_1}{2} \\
+e &= \frac{r_1 - r_p}{r_1 + r_p}
+\end{align}
+
+各点速度由活力公式给出：
+
+\begin{equation}
+v(r) = \sqrt{K_s\left(\frac{2}{r} - \frac{1}{a}\right)}
+\end{equation}
+
+其中 $K_s = 1.32712440018 \times 10^{11}$ km$^3$/s$^2$ 为日心引力常数。
+
+\subsection{月球借力模型}
+
+火箭进入月球影响范围（SOI $\approx 6.6 \times 10^4$ km）后，
+在月心系中做双曲线运动。双曲线偏转角为：
+
+\begin{equation}
+\delta = 2\arcsin\left(\frac{1}{e_h}\right), \quad
+e_h = 1 + \frac{r_p}{a_h}, \quad
+a_h = \frac{\mu_m}{v_\infty^2}
+\end{equation}
+
+由 $\delta$ 和绕月方向（leading/trailing）确定速度偏转。
+
+\subsection{总速度增量}
+
+\begin{equation}
+\Delta v_{\text{total}} = |\Delta v_{\text{发射}}| + |\Delta v_{\text{月借残差}}| + |\Delta v_{\text{再入}}|
+\end{equation}
+
+% ============================================
+\section{数值方法}
+% ============================================
+
+\subsection{N-体积分器}
+
+采用 Velocity-Verlet（2 阶辛积分器）对 Sun-Earth-Moon-Rocket 四体进行数值积分。
+主步长 $h = 3600$ s，事件细化阶段降至 $h = 60$ s。
+
+\subsection{优化算法}
+
+外层：2026 年 365 个发射日期粗扫描。
+内层：$(r_m, r_p)$ 参数网格 + 黄金分割 / 二分精化。
+
+\subsection{历表数据}
+
+使用 JPL Horizons 系统（通过课程代理服务）获取 Sun-Earth-Moon 的真实历表数据，
+用于初始状态和验证。
+
+% ============================================
+\section{结果与分析}
+% ============================================
+
+\subsection{验证结果}
+
+\subsubsection{拼接圆锥曲线（M1）}
+
+（此处插入 $r_p = 0.2$ AU 算例验证）
+
+\subsubsection{二体圆轨道基准（M2）}
+
+（此处插入 1 年位置误差）
+
+\subsubsection{Horizons 历表对照（M3）}
+
+（此处插入残差曲线图）
+
+\subsection{月球借力对比（M4）}
+
+（此处插入解析 vs 数值对照表和图表）
+
+\subsection{单点轨道求解（M5）}
+
+（此处插入三段 $\Delta v$ 数值表和无月球借力对比）
+
+\subsection{最优发射窗口（M6）}
+
+（此处插入 $\Delta v_{\text{total}}(t_0)$ 曲线和 $(t_0, r_p)$ 等值线图）
+
+最优解为：
+\begin{itemize}
+\item 发射日期 $t_0^*$：（待填入）
+\item 近日距 $r_p^*$：（待填入）
+\item 近月距 $r_m^*$：（待填入）
+\item 最小 $\Delta v_{\text{total}}^*$：（待填入）
+\end{itemize}
+
+\subsection{灵敏度分析（M7）}
+
+（此处插入灵敏度分析结果）
+
+\subsection{可视化（M8）}
+
+（此处插入轨道图、能量守恒图）
+
+% ============================================
+\section{结论}
+% ============================================
+
+本文在钱学森拼接圆锥曲线理论基础上，借助现代数值方法和 JPL 真实历表数据，
+成功求解了含月球借力的绕日返回轨道最优发射窗口问题。
+（更多结论待补充）
+
+% ============================================
+\section{致谢}
+% ============================================
+
+\subsection{他人帮助}
+（如有）
+
+\subsection{AI 工具使用声明}
+本项目使用了以下 AI 工具：
+\begin{itemize}
+\item Claude Code：协助项目结构设计、代码接口定义、README 与 Makefile 草稿生成。
+\end{itemize}
+详细交互记录见仓库根目录 \texttt{AI-Agent.md}。
+
+\begin{thebibliography}{9}
+\bibitem{qian} 钱学森，《星际航行概论》（2008 年版），中国宇航出版社，第5--6 章.
+\bibitem{vallado} Vallado D. A., \textit{Fundamentals of Astrodynamics and Applications}, 4th ed., §12.4.
+\bibitem{curtis} Curtis H. D., \textit{Orbital Mechanics for Engineering Students}, 3rd ed., §8.10.
+\bibitem{horizons} JPL Horizons User Manual: \url{https://ssd.jpl.nasa.gov/horizons/manual.html}
+\end{thebibliography}
+
+\end{document}
