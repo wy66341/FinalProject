@@ -1,36 +1,39 @@
-.PHONY: all pdf clean test
+PYTHON := $(CURDIR)/.venv/bin/python3
+SRC := $(CURDIR)/src
 
-all: report.pdf
+.PHONY: all pdf clean test figures scan verify sensitivity
 
-# --- Numerical computation & figures ---
-figures: src/conic_patch.py src/nbody.py src/lunar_swingby.py src/trajectory.py src/optimizer.py src/visualize.py
-	cd src && python conic_patch.py
-	cd src && python nbody.py
-	cd src && python lunar_swingby.py
-	cd src && python trajectory.py
-	cd src && python optimizer.py
-	cd src && python visualize.py
+all: test figures
+	@echo "=== make all done ==="
 
-# --- Orbit animation ---
-animation.mp4: src/animate.py
-	cd src && python animate.py
+pdf: report.tex
+	xelatex report.tex && xelatex report.tex && xelatex report.tex
+	@echo "report.pdf generated."
 
-# --- Compile LaTeX report ---
-report.pdf: report.tex figures animation.mp4
-	xelatex report.tex
-	xelatex report.tex
-	xelatex report.tex
+figures:
+	@echo "Generating orbit plots..."
+	$(PYTHON) $(SRC)/visualize.py
+	@echo "Figures done."
 
-pdf: report.tex figures
-	xelatex report.tex
-	xelatex report.tex
-
-# --- Verification tests ---
 test:
-	cd src && python nbody.py --test
-	cd src && python horizons_verify.py
+	@echo "=== M1: Patched Conic Validation ==="
+	$(PYTHON) $(SRC)/conic_patch.py --test
+	@echo ""
+	@echo "=== M2: Two-body Circular Benchmark ==="
+	$(PYTHON) $(SRC)/nbody.py --test
+	@echo ""
+	@echo "=== All tests passed ==="
+
+scan:
+	$(PYTHON) $(SRC)/optimizer.py
+
+verify:
+	$(PYTHON) $(SRC)/horizons_verify.py
+
+sensitivity:
+	$(PYTHON) $(SRC)/sensitivity.py
 
 clean:
 	rm -f report.pdf report.aux report.log report.out report.toc report.synctex.gz
-	rm -f src/*.png src/*.pdf animation.mp4
-	rm -rf data/*.json data/*.npz
+	rm -f data/*.png animation.mp4
+	rm -rf src/__pycache__

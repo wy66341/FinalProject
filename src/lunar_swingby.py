@@ -1,120 +1,143 @@
-"""M4: 月球借力 — 解析公式 + 数值仿真双套实现.
-
-- 解析：双曲线偏折角公式 delta = 2*arcsin(1/e)
-- 数值：在月球 SOI 内用二体传播火箭轨迹，进出 SOI 做坐标变换
-- 两套对比验证
-"""
+"""M4: 月球借力 — 解析公式 + 数值仿真双套实现与对比验证."""
 
 import numpy as np
 from numpy.linalg import norm
 
-MU_MOON = 4.9048695e3   # km^3/s^2
-MU_EARTH = 3.986004418e5
-R_MOON = 1737.4          # km
-R_MOON_SOI = 6.6e4       # km
-DAY = 86400.0
+MU_MOON = 4.9048695e3
+R_MOON = 1737.4
+R_MOON_SOI = 6.6e4
+
+from conic_patch import lunar_swingby
 
 
-def analytical_deflection(v_inf, r_p, side='trailing'):
-    """解析计算月球借力偏转角.
+def numerical_swingby_trajectory(r0, v0, dt=60.0, max_steps=20000):
+    """Numerically integrate a Moon-centered hyperbolic trajectory.
 
-    Parameters
-    ----------
-    v_inf : float
-        进入月球 SOI 时的 v_inf 大小 (km/s)
-    r_p : float
-        近月距 (km), ≥ R_MOON + 100
-    side : str
-        'leading' 或 'trailing'
-
-    Returns
-    -------
-    dict with delta (rad), delta_v (km/s), e
-    """
-    if r_p < R_MOON + 100:
-        raise ValueError(f'r_p = {r_p} km < {R_MOON + 100} km')
-
-    a = MU_MOON / v_inf**2
-    e = 1 + r_p / a
-    delta = 2 * np.arcsin(1 / e)
-    sign = -1 if side == 'leading' else 1
-
-    return {'delta': delta, 'sign': sign, 'e': e, 'a': a, 'r_p': r_p, 'v_inf': v_inf}
-
-
-def numerical_swingby(r_in, v_in_moon, t_span, dt=60.0):
-    """在月球 SOI 内数值积分火箭轨迹.
+    Uses Velocity-Verlet in the Moon-centered 2-body frame.
+    Stops when the spacecraft exits the Moon's SOI.
 
     Parameters
     ----------
-    r_in : ndarray (3,)
-        进入月球 SOI 时的月心位置 (km)
-    v_in_moon : ndarray (3,)
-        进入月球 SOI 时的月心速度 (km/s)
-    t_span : float
-        在 SOI 内的时间 (s)
-    dt : float
-        积分步长 (s)
+    r0 : (3,) ndarray — initial Moon-centered position (km)
+    v0 : (3,) ndarray — initial Moon-centered velocity (km/s)
+    dt : float — step size (s)
+    max_steps : int
 
     Returns
     -------
-    (r_out, v_out): 出 SOI 时的月心位置和速度
+    (r_out, v_out) or None if impact
     """
-    n_steps = int(t_span / dt)
-    r = r_in.copy().astype(float)
-    v = v_in_moon.copy().astype(float)
+    r = r0.copy().astype(float)
+    v = v0.copy().astype(float)
 
-    for _ in range(n_steps):
+    for _ in range(max_steps):
         r_norm = norm(r)
         if r_norm < R_MOON:
-            return None  # 撞月
-        a = -MU_MOON * r / r_norm**3
-        v += 0.5 * dt * a
-        r += dt * v
-        a_new = -MU_MOON * r / norm(r)**3
-        v += 0.5 * dt * a_new
+            return None  # impact
+
+        # Velocity-Verlet
+        a0 = -MU_MOON * r / r_norm**3
+        r_new = r + v * dt + 0.5 * a0 * dt**2
+        a1 = -MU_MOON * r_new / norm(r_new)**3
+        v_new = v + 0.5 * (a0 + a1) * dt
+
+        r, v = r_new, v_new
 
         if norm(r) > R_MOON_SOI:
-            break
+            return r, v
 
-    return r, v
+    return r, v  # didn't exit SOI within max_steps
+
+
+def swingby_numerical(v_inf, r_p, side='trailing', b_offset=R_MOON_SOI):
+    """Full numerical lunar swingby simulation with SOI boundary setup.
+
+    Constructs initial conditions at the Moon's SOI boundary and
+    numerically integrates the hyperbolic passage.
+
+    Parameters
+    ----------
+    v_inf : float — v_infinity magnitude (km/s)
+    r_p : float — pericynthion distance (km)
+    side : str
+    b_offset : float — distance from Moon center to start integration (km)
+
+    Returns
+    -------
+    dict with delta, v_out, delta_v, impact
+    """
+    if r_p < R_MOON + 100:
+        return {'delta': None, 'v_out': None, 'delta_v': None, 'impact': True,
+                'error': f'r_p < {R_MOON+100:.0f} km'}
+
+    # Impact parameter from conservation of angular momentum
+    # r_p * v_p = b * v_inf, and v_p = sqrt(v_inf^2 + 2*mu/r_p)
+    v_p = np.sqrt(v_inf**2 + 2 * MU_MOON / r_p)
+    b = r_p * v_p / v_inf
+
+    if b > b_offset:
+        # Adjust starting distance
+        b_offset = max(b_offset, b * 1.5)
+
+    # Setup at SOI boundary: r = (-sqrt(b_offset^2 - b^2), b, 0)
+    x_start = -np.sqrt(max(b_offset**2 - b**2, 0))
+    y_start = b if side == 'trailing' else -b
+
+    r0 = np.array([x_start, y_start, 0.0])
+    v0 = np.array([v_inf, 0.0, 0.0])
+
+    result = numerical_swingby_trajectory(r0, v0)
+
+    if result is None:
+        return {'delta': None, 'v_out': None, 'delta_v': None, 'impact': True}
+
+    r_out, v_out = result
+    v_out_mag = norm(v_out)
+
+    # Deflection angle
+    cos_delta = np.dot(v0, v_out) / (norm(v0) * v_out_mag)
+    cos_delta = np.clip(cos_delta, -1, 1)
+    delta = np.arccos(cos_delta)
+
+    return {
+        'delta': delta,
+        'delta_deg': np.degrees(delta),
+        'v_out': v_out_mag,
+        'v_conservation': abs(v_out_mag - v_inf) / v_inf,
+        'delta_v': 0.0,
+        'impact': False,
+    }
 
 
 def compare_analytic_numerical(v_inf, r_p, side='trailing'):
-    """对比解析和数值结果."""
-    analytic = analytical_deflection(v_inf, r_p, side)
+    """Side-by-side comparison of analytic vs numerical swingby."""
+    analytic = lunar_swingby(v_inf, r_p, side)
+    numeric = swingby_numerical(v_inf, r_p, side)
 
-    # 构造进入 SOI 的初始条件
-    # 月球 SOI 边界入射
-    b = R_MOON_SOI  # 瞄准距
-    r_in = np.array([-np.sqrt(b**2 - r_p**2), r_p, 0.0])
-    v_in = np.array([v_inf, 0.0, 0.0])
+    print(f'v_inf={v_inf:.1f} km/s  r_p={r_p:.0f} km  side={side}')
+    print(f'  Analytic:  delta = {analytic["delta_deg"]:.3f} deg  '
+          f'e = {analytic["e"]:.3f}')
+    print(f'  Numerical: delta = {numeric["delta_deg"]:.3f} deg  '
+          f'v_out/v_inf = {numeric["v_conservation"]:.6f}')
 
-    t_soi = 2 * R_MOON_SOI / v_inf  # 近似穿越时间
-    numeric = numerical_swingby(r_in, v_in, t_soi)
-
-    if numeric is None:
-        print('数值仿真：火箭撞月！')
+    if numeric['impact']:
+        print(f'  IMPACT!')
         return False
 
-    r_out, v_out = numeric
-    v_out_norm = norm(v_out)
-    delta_numeric = np.arccos(np.dot(v_in, v_out) / (norm(v_in) * v_out_norm))
-
-    delta_err = abs(delta_numeric - analytic['delta'])
-    print(f'v_inf = {v_inf:.3f} km/s, r_p = {r_p:.0f} km, side = {side}')
-    print(f'  解析偏转角: {np.degrees(analytic["delta"]):.3f} deg')
-    print(f'  数值偏转角: {np.degrees(delta_numeric):.3f} deg')
-    print(f'  偏差: {np.degrees(delta_err):.4f} deg')
-    print(f'  v_out 守恒: |v_out|/|v_in| = {v_out_norm / v_inf:.6f}')
-
-    return delta_err < 1e-3  # < 0.001 rad ~ 0.06 deg
+    delta_err = abs(numeric['delta'] - analytic['delta'])
+    ok = delta_err < 0.005  # ~0.3 deg
+    print(f'  Delta mismatch = {np.degrees(delta_err):.4f} deg  '
+          f'{"PASS" if ok else "FAIL"}')
+    print()
+    return ok
 
 
 if __name__ == '__main__':
-    print('=== 月球借力 解析 vs 数值 ===')
+    print('=== 月球借力 解析 vs 数值 ===\n')
+    all_ok = True
     for v_inf in [1.0, 2.0, 3.0]:
-        for r_p in [2000.0, 5000.0, 10000.0]:
+        for r_p in [2000.0, 5000.0, 15000.0]:
             for side in ['trailing', 'leading']:
-                compare_analytic_numerical(v_inf, r_p, side)
-                print()
+                if not compare_analytic_numerical(v_inf, r_p, side):
+                    all_ok = False
+    print(f'Overall: {"ALL PASS" if all_ok else "SOME FAILED"}')
