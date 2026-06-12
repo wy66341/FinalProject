@@ -83,12 +83,13 @@ def velocity_verlet_step(y, dt, accel_func=acceleration_sem):
     y_new = y.copy()
 
     # Position update for all 4 bodies
+    # dydt layout: [pos_vel(3), vel_acc(3)] per body — a0[p:p+3]=velocity, a0[v:v+3]=acceleration
     for i in range(4):
         p_s = i * 6
         v_s = p_s + 3
         y_new[p_s:p_s + 3] = (y[p_s:p_s + 3]
                               + y[v_s:v_s + 3] * dt
-                              + 0.5 * a0[p_s:p_s + 3] * dt**2)
+                              + 0.5 * a0[v_s:v_s + 3] * dt**2)
 
     # Acceleration at new positions
     a1 = accel_func(y_new)

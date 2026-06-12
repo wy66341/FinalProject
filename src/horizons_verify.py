@@ -66,15 +66,31 @@ def build_initial_state(earth_p, earth_v, moon_p, moon_v):
     return y0
 
 
-def run_verification(start_date='2026-06-01', n_days=30, dt=3600):
-    """Compare N-body propagation vs Horizons (or analytic) over n_days.
+def _get_earth_moon_state(date_str):
+    """Get Earth/Moon state, Horizons preferred, analytic fallback."""
+    state = get_horizons_state(date_str)
+    if state is not None:
+        return state
+    parts = date_str.split('-')
+    yr, mo, dy = int(parts[0]), int(parts[1]), int(parts[2])
+    jd = _julian_date(yr, mo, dy)
+    return earth_moon_analytic_state(jd)
 
-    For each day, propagate from JPL initial state and compare.
+
+def run_verification(start_date='2026-06-01', n_days=30, dt=3600):
+    """Compare N-body propagation vs reference ephemeris over n_days.
+
+    Uses JPL Horizons if available, otherwise analytic ephemeris.
+    The comparison is: propagate initial state 1 day → compare with
+    reference state at the next day.
     """
+    use_jpl = get_horizons_state(start_date) is not None
+    source = 'JPL Horizons' if use_jpl else 'analytic ephemeris'
     print(f'Horizons Ephemeris Verification')
-    print(f'  Period: {start_date} + {n_days} days')
-    print(f'  Step:   {dt} s')
-    print(f'  Target: position residual ≤ 6000 km\n')
+    print(f'  Source:  {source}')
+    print(f'  Period:  {start_date} + {n_days} days')
+    print(f'  Step:    {dt} s')
+    print(f'  Target:  position residual ≤ 6000 km\n')
 
     start = datetime.strptime(start_date, '%Y-%m-%d')
     steps_per_day = int(DAY / dt)
@@ -86,54 +102,34 @@ def run_verification(start_date='2026-06-01', n_days=30, dt=3600):
     for d in range(n_days):
         date = start + timedelta(days=d)
         date_str = date.strftime('%Y-%m-%d')
+        next_str = (date + timedelta(days=1)).strftime('%Y-%m-%d')
 
-        # Get initial state
-        state = get_horizons_state(date_str)
-        if state is None:
-            # Fallback: compare analytic propagation against itself
-            jd = _julian_date(date.year, date.month, date.day)
-            ep, ev, mp, mv = earth_moon_analytic_state(jd)
-        else:
-            ep, ev, mp, mv = state
-
+        ep, ev, mp, mv = _get_earth_moon_state(date_str)
         y0 = build_initial_state(ep, ev, mp, mv)
-
-        # Save initial Earth/Moon positions for comparison after 1 day
-        earth_p0 = y0[6:9].copy()
-        moon_p0 = y0[12:15].copy()
 
         # Propagate 1 day
         y = y0.copy()
         try:
             for _ in range(steps_per_day):
                 y = velocity_verlet_step(y, dt)
-        except RuntimeError as e:
+        except RuntimeError:
             failures += 1
             continue
 
-        # Compare with reference (next day's Horizons)
-        next_date = (date + timedelta(days=1)).strftime('%Y-%m-%d')
-        ref = get_horizons_state(next_date)
+        # Reference state at next day
+        ep_ref, _, mp_ref, _ = _get_earth_moon_state(next_str)
 
-        if ref is not None:
-            earth_ref_p = ref[0]
-            moon_ref_p = ref[2]
-        else:
-            jd_next = _julian_date(date.year, date.month, date.day + 1)
-            ep_r, _, mp_r, _ = earth_moon_analytic_state(jd_next)
-            earth_ref_p = ep_r
-            moon_ref_p = mp_r
-
-        earth_err = norm(y[6:9] - earth_ref_p)
-        moon_err = norm(y[12:15] - moon_ref_p)
+        earth_err = norm(y[6:9] - ep_ref)
+        moon_err = norm(y[12:15] - mp_ref)
 
         max_earth_err = max(max_earth_err, earth_err)
         max_moon_err = max(max_moon_err, moon_err)
 
         if d % 10 == 0 or d == n_days - 1:
+            E_drift = abs(system_energy(y) / system_energy(y0) - 1)
             print(f'  Day {d:3d}: Earth err = {earth_err:.0f} km  '
                   f'Moon err = {moon_err:.0f} km  '
-                  f'E drift = {abs(system_energy(y)/system_energy(y0)-1):.2e}')
+                  f'E drift = {E_drift:.2e}')
 
     print(f'\n=== Summary ===')
     print(f'  Max Earth pos error: {max_earth_err:.0f} km  '
