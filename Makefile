@@ -1,13 +1,18 @@
 PYTHON := $(CURDIR)/.venv/bin/python3
 SRC := $(CURDIR)/src
+XELATEX := $(HOME)/Library/TinyTeX/bin/universal-darwin/xelatex
 
 .PHONY: all pdf clean test figures scan verify sensitivity
 
-all: test figures
-	@echo "=== make all done ==="
+all: test figures pdf
 
 pdf: report.tex
-	xelatex report.tex && xelatex report.tex && xelatex report.tex
+	@if [ ! -x "$(XELATEX)" ]; then \
+		echo "xelatex not found at $(XELATEX)"; \
+		echo "Install: brew install --cask basictex"; \
+		exit 1; \
+	fi
+	$(XELATEX) report.tex && $(XELATEX) report.tex && $(XELATEX) report.tex
 	@echo "report.pdf generated."
 
 figures:
