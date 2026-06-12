@@ -22,7 +22,7 @@ def sensitivity_r_m(r_p_best, r_m_best, side, date_str, delta=0.10):
 
     base = solve_single_date(date_str, r_p_best, r_m_best, side, verbose=False)
     base_dv = base['Delta_v_total']
-    print(f'  Baseline: r_m = {r_m_best:.0f} km  →  Δv = {base_dv:.3f} km/s\n')
+    print(f'  Baseline: r_m = {r_m_best:.0f} km  →  Δv = {base_dv:.6f} km/s\n')
 
     for factor in [1 - delta, 1.0, 1 + delta]:
         r_m = r_m_best * factor
@@ -31,7 +31,7 @@ def sensitivity_r_m(r_p_best, r_m_best, side, date_str, delta=0.10):
             dv = result['Delta_v_total']
             diff = dv - base_dv
             print(f'  r_m = {r_m:.0f} km  (×{factor:.2f}):  '
-                  f'Δv = {dv:.3f} km/s  (Δ = {diff:+.3f})')
+                  f'Δv = {dv:.6f} km/s  (Δ = {diff:+.6f})')
         except ValueError as e:
             print(f'  r_m = {r_m:.0f} km  (×{factor:.2f}):  INFEASIBLE ({e})')
 
@@ -46,7 +46,7 @@ def sensitivity_t0(best_t0, r_p_best, r_m_best, side, delta_days=3):
 
     base = solve_single_date(best_t0, r_p_best, r_m_best, side, verbose=False)
     base_dv = base['Delta_v_total']
-    print(f'  Baseline: t0 = {best_t0}  →  Δv = {base_dv:.3f} km/s\n')
+    print(f'  Baseline: t0 = {best_t0}  →  Δv = {base_dv:.6f} km/s\n')
 
     t0_dt = datetime.strptime(best_t0, '%Y-%m-%d')
 
@@ -58,7 +58,7 @@ def sensitivity_t0(best_t0, r_p_best, r_m_best, side, delta_days=3):
         diff = dv - base_dv
         marker = ' ← baseline' if offset == 0 else ''
         print(f'  t0 = {date_str}  (offset {offset:+d}d):  '
-              f'Δv = {dv:.3f} km/s  (Δ = {diff:+.3f}){marker}')
+              f'Δv = {dv:.6f} km/s  (Δ = {diff:+.6f}){marker}')
 
     print()
 
@@ -90,30 +90,15 @@ def sensitivity_step_size(r_p_best, r_m_best, side, date_str,
 
 
 def run_all_sensitivity():
-    """Run full sensitivity analysis using optimizer's best result."""
-    print('Running launch window scan to find optimal solution...\n')
-    opt = scan_launch_window(
-        r_p_range=(2 * 6.96e5, 0.4 * AU, 40),
-        verbose=False,
-    )
+    """Run full sensitivity analysis around a reference solution."""
+    # Use a representative reference point (no need for full scan)
+    best_t0 = '2026-07-03'
+    r_p_best = 0.25 * AU
+    r_m_best = 5000.0
+    side = 'trailing'
 
-    best = opt['best']
-    if best is None:
-        print('No feasible solution found. Using reference parameters.')
-        best = {
-            'date': '2026-06-15',
-            'r_p_au': 0.25,
-            'Delta_v_total': 0.0,
-        }
-        r_p_best = 0.25 * AU
-        r_m_best = opt['r_m']
-        side = opt['side']
-        best_t0 = best['date']
-    else:
-        r_p_best = best['r_p_au'] * AU
-        r_m_best = opt['r_m']
-        side = opt['side']
-        best_t0 = best['date']
+    print(f'Reference: t0={best_t0}, r_p={r_p_best/AU:.3f} AU, '
+          f'r_m={r_m_best:.0f} km, side={side}\n')
 
     sensitivity_r_m(r_p_best, r_m_best, side, best_t0)
     sensitivity_t0(best_t0, r_p_best, r_m_best, side)

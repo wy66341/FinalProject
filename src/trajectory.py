@@ -29,12 +29,16 @@ def _julian_date(year, month, day):
     return jd
 
 
+_EPHEM_CACHE = {}
+
 def get_ephemeris(date_str):
-    """Get Earth/Moon state for a given date.
+    """Get Earth/Moon state for a given date. Results are cached per date.
 
     Tries JPL Horizons first; falls back to analytic.
     Returns (earth_pos, earth_vel, moon_pos, moon_vel) in km, km/s.
     """
+    if date_str in _EPHEM_CACHE:
+        return _EPHEM_CACHE[date_str]
     try:
         from astroquery.jplhorizons import Horizons
 
@@ -53,6 +57,7 @@ def get_ephemeris(date_str):
         mv = np.array([float(vec_m['vx'][0]), float(vec_m['vy'][0]),
                        float(vec_m['vz'][0])]) * AU / DAY
 
+        _EPHEM_CACHE[date_str] = (ep, ev, mp, mv)
         return ep, ev, mp, mv
     except Exception:
         pass
@@ -61,28 +66,25 @@ def get_ephemeris(date_str):
     parts = date_str.split('-')
     yr, mo, dy = int(parts[0]), int(parts[1]), int(parts[2])
     jd = _julian_date(yr, mo, dy)
-    return earth_moon_analytic_state(jd)
+    result = earth_moon_analytic_state(jd)
+    _EPHEM_CACHE[date_str] = result
+    return result
 
 
 def solve_single_date(date_str, r_p, r_m=None, side=None,
                       use_lunar=True, verbose=True):
     """Solve the complete trajectory for a fixed launch date.
 
-    Parameters
-    ----------
-    date_str : str — 'YYYY-MM-DD'
-    r_p : float — perihelion distance (km)
-    r_m : float or None — Moon closest approach (km)
-    side : str or None — 'leading' or 'trailing'
-    use_lunar : bool — enable lunar gravity assist
-    verbose : bool
-
-    Returns
-    -------
-    dict with full trajectory breakdown
+    Uses actual Earth-Sun distance from ephemeris for the given date,
+    so Delta-v varies realistically with launch date.
     """
-    # Heliocentric ellipse parameters
-    ell = helio_ellipse(r_p)
+    # Get actual Earth state for this date
+    ep, ev, mp, mv = get_ephemeris(date_str)
+    r_1 = norm(ep)  # actual Earth-Sun distance (km)
+    v_earth_actual = norm(ev)  # actual Earth orbital speed
+
+    # Heliocentric ellipse parameters with actual r_1
+    ell = helio_ellipse(r_p, r_1)
 
     # Earth departure Delta-v
     dv_launch = earth_departure(ell['Delta_v_dep'])
@@ -94,11 +96,9 @@ def solve_single_date(date_str, r_p, r_m=None, side=None,
     dv_lunar = 0.0
     swingby_info = None
     if use_lunar and r_m is not None and side is not None:
-        # Estimate Moon-relative v_inf at SOI
-        v_earth = ell['v_earth']
-        v_moon_orbit = np.sqrt(MU_EARTH / 384400.0)  # ~1.02 km/s
+        v_moon_orbit = np.sqrt(MU_EARTH / 384400.0)
         v_inf_moon = abs(ell['Delta_v_dep'] - v_moon_orbit)
-        v_inf_moon = max(v_inf_moon, 0.5)  # minimum > 0
+        v_inf_moon = max(v_inf_moon, 0.5)
 
         try:
             swingby_info = lunar_swingby(v_inf_moon, r_m, side)
@@ -109,7 +109,9 @@ def solve_single_date(date_str, r_p, r_m=None, side=None,
 
     # No-moon baseline
     dv_no_moon = earth_departure(ell['Delta_v_dep']) + earth_arrival(ell['Delta_v_dep'])
-    saving_pct = (dv_no_moon - dv_total) / dv_no_moon * 100 if dv_no_moon > 0 else 0
+    saving_pct = 0.0
+    if dv_no_moon > 1e-6 and np.isfinite(dv_no_moon) and np.isfinite(dv_total):
+        saving_pct = (dv_no_moon - dv_total) / dv_no_moon * 100
 
     # Constraint checks
     constraints = {
