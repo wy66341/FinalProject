@@ -46,10 +46,21 @@ def helio_ellipse(r_p, r_1=AU, k_s=MU_SUN):
 
 
 def earth_departure(v_inf):
-    """Delta-v from 200 km LEO to hyperbolic escape with given v_inf.
+    """Trans-Mars/Earth-departure injection Δv from 200 km circular LEO.
 
-    v_inf : km/s — excess speed after escaping Earth SOI
-    Returns : km/s — impulsive Delta-v from circular LEO
+    Starting point: 200 km altitude circular parking orbit (r = R_EARTH + 200 km).
+    This is the reference departure point — launch vehicle Δv from ground to this
+    parking orbit (~9.4 km/s including drag/gravity losses) is NOT included, as
+    the problem defines the reference starting point as this parking orbit.
+
+    Physics: impulsive burn from circular speed to hyperbolic excess v_inf.
+      Δv = √(v_inf² + v_esc²) - v_circ
+
+    Args:
+        v_inf: km/s — hyperbolic excess speed after escaping Earth SOI
+
+    Returns:
+        km/s — impulsive Δv from 200 km circular LEO
     """
     r_leo = R_EARTH + 200.0
     v_esc = np.sqrt(2.0 * MU_EARTH / r_leo)
@@ -58,10 +69,21 @@ def earth_departure(v_inf):
 
 
 def earth_arrival(v_inf, max_v_inf=15.0):
-    """Delta-v for capture from hyperbolic approach.
+    """Propulsive capture Δv from hyperbolic approach to 200 km circular LEO.
 
-    v_inf : km/s — approach excess speed
-    Returns : km/s, or inf if > max_v_inf
+    Physical meaning: the spacecraft arrives at Earth with hyperbolic excess v_inf
+    and executes an impulsive burn at 200 km perigee to circularize. This is
+    propulsive capture (NOT atmospheric reentry/aerocapture).
+
+    Uses the same vis-viva formula as departure (reversed direction):
+      Δv = √(v_inf² + v_esc²) - v_circ
+
+    Args:
+        v_inf: km/s — approach hyperbolic excess speed
+        max_v_inf: km/s — if v_inf exceeds this, return inf (constraint violation)
+
+    Returns:
+        km/s — impulsive capture Δv to 200 km circular LEO, or inf
     """
     if v_inf > max_v_inf:
         return np.inf
@@ -101,28 +123,60 @@ def lunar_swingby(v_inf, r_p, side='trailing'):
 
 
 def total_delta_v(r_p, v_inf_dep, v_inf_arr, r_m=None, side=None, v_inf_moon=0.0):
-    """Sum of Delta-v contributions across all mission phases.
+    """Compute complete Δv budget across all mission phases.
+
+    Δv_total = Δv_launch + Δv_lunar_residual + Δv_reentry
+
+    Where:
+      Δv_launch:       departure injection from 200 km LEO (includes any
+                       lunar-assist savings — a lower v_inf_dep means
+                       a lower Δv_launch)
+      Δv_lunar_residual: sum of closure correction terms:
+        - Earth-Moon leg closure (mid-course correction to ensure Moon SOI entry)
+        - Flyby deficit (if flyby deflection differs from required value)
+        - Heliocentric splice (matching Moon-relative exit to heliocentric entry)
+        - Return rendezvous (terminal correction for Earth intercept)
+        In the ideal patched-conic approximation, all four are zero.
+      Δv_reentry:      propulsive capture from hyperbolic approach to 200 km LEO
 
     Returns
     -------
-    dict: Delta_v_total, Delta_v_launch, Delta_v_lunar, Delta_v_reentry
+    dict with keys:
+        Delta_v_total, Delta_v_launch, Delta_v_lunar_residual, Delta_v_reentry,
+        em_closure, flyby_deficit, helio_splice, return_rendezvous, swingby
     """
     dv_launch = earth_departure(v_inf_dep)
     dv_reentry = earth_arrival(v_inf_arr)
 
-    dv_lunar = 0.0
+    # ── Lunar swingby closure terms ──
     swingby_info = None
+    em_closure = 0.0      # Earth-Moon mid-course correction
+    flyby_deficit = 0.0   # Flyby deflection shortfall
+    helio_splice = 0.0    # Heliocentric leg matching
+    return_rendezvous = 0.0  # Terminal Earth-intercept correction
+
     if r_m is not None and side is not None:
         swingby_info = lunar_swingby(v_inf_moon, r_m, side)
-        dv_lunar = 0.0  # ideal passive flyby
 
-    dv_total = dv_launch + dv_lunar + dv_reentry
+        # In the ideal patched-conic approximation, all closure terms are zero.
+        # A full N-body treatment would compute these via differential correction:
+        #   em_closure:        Lambert solve Earth→Moon, Δv at SOI entry
+        #   flyby_deficit:     |required_deflection - achieved_deflection|
+        #   helio_splice:      match Moon-SOI-exit state to heliocentric target
+        #   return_rendezvous: Lambert solve heliocentric→Earth, Δv at SOI entry
+
+    dv_lunar_residual = em_closure + flyby_deficit + helio_splice + return_rendezvous
+    dv_total = dv_launch + dv_lunar_residual + dv_reentry
 
     return {
         'Delta_v_total': dv_total,
         'Delta_v_launch': dv_launch,
-        'Delta_v_lunar': dv_lunar,
+        'Delta_v_lunar_residual': dv_lunar_residual,
         'Delta_v_reentry': dv_reentry,
+        'em_closure': em_closure,
+        'flyby_deficit': flyby_deficit,
+        'helio_splice': helio_splice,
+        'return_rendezvous': return_rendezvous,
         'swingby': swingby_info,
     }
 
@@ -190,7 +244,13 @@ def verify_rp_02_au():
     print(f'  Delta_v from 200km LEO    = {dv_leo:.3f} km/s')
 
     total = total_delta_v(r_p, dv, dv)
-    print(f'  Delta_v total (round-trip) = {total["Delta_v_total"]:.3f} km/s')
+    print(f'  Delta_v launch:   {total["Delta_v_launch"]:.3f} km/s  '
+          f'(from 200 km LEO)')
+    if total.get('Delta_v_lunar_residual', 0) > 0:
+        print(f'  Lunar residual:   {total["Delta_v_lunar_residual"]:.3f} km/s')
+    print(f'  Delta_v reentry:  {total["Delta_v_reentry"]:.3f} km/s  '
+          f'(propulsive capture to 200 km LEO)')
+    print(f'  Delta_v total:    {total["Delta_v_total"]:.3f} km/s')
 
     print(f'\n  Overall: {"PASS" if ok else "FAIL — update ref values"}')
     return True  # Physics is correct; refs may need updating from report.tex

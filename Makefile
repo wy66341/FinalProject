@@ -2,7 +2,7 @@ PYTHON := $(CURDIR)/.venv/bin/python3
 SRC := $(CURDIR)/src
 XELATEX := $(HOME)/Library/TinyTeX/bin/universal-darwin/xelatex
 
-.PHONY: all pdf clean test figures scan verify sensitivity
+.PHONY: all pdf clean test figures scan verify judge judge-dev sensitivity
 
 all: test figures pdf
 
@@ -34,6 +34,14 @@ scan:
 
 verify:
 	$(PYTHON) $(SRC)/horizons_verify.py
+
+judge:
+	@echo "=== 裁判验证：JPL Horizons 接入 + N-体全年对比 ==="
+	$(PYTHON) $(SRC)/horizons_verify.py --judge
+
+judge-dev:
+	@echo "=== 裁判验证（开发模式——允许解析历表回退）==="
+	$(PYTHON) $(SRC)/horizons_verify.py --judge --allow-analytic
 
 sensitivity:
 	$(PYTHON) $(SRC)/sensitivity.py
