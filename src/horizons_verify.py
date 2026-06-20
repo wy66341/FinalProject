@@ -693,6 +693,57 @@ def check_gr_correction():
     return all_ok, {'ratio': ratio, 'pos_diff': pos_diff}
 
 
+# ── Part J: 机器可读输出验证 (规则 14) ──────────────────────────────────────
+
+def check_machine_output():
+    """验证机器可读轨迹输出包含所有必需字段."""
+    import json
+
+    print('-' * 70)
+    print('Part J: 机器可读输出验证 (规则 14)')
+    print('-' * 70)
+
+    from conic_patch import AU
+    from trajectory import solve_and_emit_trajectory
+
+    out_path = 'data/mission_summary.json'
+    summary = solve_and_emit_trajectory(
+        '2026-01-07', 0.35 * AU, r_m=5000, side='trailing',
+        output_file=out_path,
+    )
+
+    required = [
+        ('launch_date', summary['mission']),
+        ('moon_closest_approach_iso', summary['encounter_times']),
+        ('earth_return_iso', summary['encounter_times']),
+        ('moon_closest', summary['miss_distances_km']),
+        ('earth_closest', summary['miss_distances_km']),
+        ('perihelion_km', summary),
+        ('launch', summary['delta_v_kms']),
+        ('lunar_residual', summary['delta_v_kms']),
+        ('reentry', summary['delta_v_kms']),
+        ('total', summary['delta_v_kms']),
+        ('trajectory_states', summary),
+    ]
+
+    ok = True
+    for name, src in required:
+        if name == 'trajectory_states':
+            has = len(summary.get('trajectory', [])) > 0
+        else:
+            has = src.get(name) is not None
+        if not has:
+            print(f'  ✗ Missing: {name}')
+            ok = False
+
+    print(f'\n  Snapshot count: {summary["n_snapshots"]}')
+    print(f'  Output file:    {out_path}')
+    c = 'PASS' if ok else 'FAIL'
+    print(f'  判定: {c}')
+
+    return ok, summary
+
+
 # ── Part B: N-体全年积分 vs JPL Horizons 历表 ──────────────────────────────
 
 def _julian_date(year, month, day):
@@ -1203,6 +1254,10 @@ if __name__ == '__main__':
         gr_ok, gr_details = check_gr_correction()
         print()
 
+        # Part J: 机器可读输出
+        out_ok, out_details = check_machine_output()
+        print()
+
         # Part B: 全年积分对比
         print('─' * 70)
         print('Part B: N-体积分全年对比')
@@ -1226,9 +1281,10 @@ if __name__ == '__main__':
         print(f'  Part G (3D 扩展验证):          {"PASS" if d3_ok else "FAIL"}')
         print(f'  Part H (多次借力验证):         {"PASS" if multi_ok else "FAIL"}')
         print(f'  Part I (GR 修正验证):          {"PASS" if gr_ok else "FAIL"}')
+        print(f'  Part J (机器可读输出):         {"PASS" if out_ok else "FAIL"}')
         if 'FALLBACK' in results.get('ref_source', ''):
             print(f'  ⚠ Part B 使用了非 Horizons 参考历表，结果无效')
-        final = access_ok and nbody_ok and lunar_ok and mission_ok and scan_ok and sens_ok and d3_ok and multi_ok and gr_ok
+        final = access_ok and nbody_ok and lunar_ok and mission_ok and scan_ok and sens_ok and d3_ok and multi_ok and gr_ok and out_ok
         print(f'\n  ╔══════════════════════════════════════════╗')
         print(f'  ║  最终判定: {"PASS ✓" if final else "FAIL ✗":>28s}  ║')
         print(f'  ╚══════════════════════════════════════════╝')

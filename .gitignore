@@ -13,7 +13,7 @@ build/
 *.mp4
 *.avi
 
-data/*.json
+data/scan_results.json
 data/*.npz
 
 .env

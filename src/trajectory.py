@@ -621,6 +621,252 @@ def verify_full_mission(date_str, r_p, r_m=None, side=None, dt=3600):
     return result
 
 
+def solve_and_emit_trajectory(date_str, r_p, r_m=None, side=None,
+                               dt=3600, output_file=None):
+    """Solve single-date trajectory and emit machine-readable output.
+
+    Produces a complete JSON summary with:
+      - Δv budget (launch, lunar_residual, reentry, total, nomoon)
+      - Encounter times (Moon closest approach, Earth return)
+      - Miss distances (Moon, Earth)
+      - Perihelion distance
+      - Timestamped state snapshots (every N steps)
+      - Physical constraint checks (R15/R16/R18)
+
+    If output_file is provided, saves to that path.
+    Prints summary to stdout.
+
+    Returns the summary dict.
+    """
+    import json, os
+    from datetime import datetime as _dt, timedelta as _td
+
+    # ── Analytic solution ──
+    sol = solve_single_date(date_str, r_p, r_m, side, verbose=False)
+
+    # ── Full N-body trajectory with timestamp tracking ──
+    from nbody import velocity_verlet_step
+
+    ep, ev, mp, mv = get_ephemeris(date_str)
+    r_1 = norm(ep)
+    ell = helio_ellipse(r_p, r_1)
+
+    # Build initial state and scan for Moon intercept
+    y0 = np.zeros(24)
+    y0[0:3] = [0, 0, 0]
+    y0[3:6] = [0, 0, 0]
+    y0[6:9] = ep
+    y0[9:12] = ev
+    y0[12:15] = mp
+    y0[15:18] = mv
+
+    v_earth_dir = ev / norm(ev)
+    v_dep = ev - ell['Delta_v_dep'] * v_earth_dir
+    r_start = 6378.137 + 200.0
+    dt_scan = 3600
+
+    best_approach = float('inf')
+    best_traj = None
+    best_moon_time = 0.0
+
+    for hour_off in range(0, 24, 4):
+        y_adv = y0.copy()
+        for _ in range(int(hour_off * 3600 / dt_scan)):
+            try:
+                y_adv = velocity_verlet_step(y_adv, dt_scan)
+            except RuntimeError:
+                break
+        ep_o = y_adv[6:9].copy()
+        for az_deg in range(0, 360, 60):
+            az = np.radians(az_deg)
+            launch_dir = np.array([np.cos(az), np.sin(az), 0.0])
+            y_try = y_adv.copy()
+            y_try[18:21] = ep_o + r_start * launch_dir
+            y_try[21:24] = v_dep
+
+            for step in range(250):
+                try:
+                    y_try = velocity_verlet_step(y_try, dt_scan)
+                except RuntimeError:
+                    break
+                d = norm(y_try[18:21] - y_try[12:15])
+                if d < best_approach:
+                    best_approach = d
+                    best_traj = y_try.copy()
+                    best_moon_time = hour_off * 3600.0 + step * dt_scan
+
+    # ── Phase 2: Apply flyby deflection ──
+    if best_traj is not None and r_m is not None and side is not None:
+        v_rocket = best_traj[21:24].copy()
+        v_moon_fb = best_traj[15:18].copy()
+        v_inf_vec = v_rocket - v_moon_fb
+        v_inf_mag = norm(v_inf_vec)
+        if v_inf_mag > 0.5:
+            try:
+                sw = lunar_swingby(v_inf_mag, r_m, side)
+                delta = sw['delta']
+                sgn = sw['sign']
+                v_inf_dir = v_inf_vec / v_inf_mag
+                v_moon_dir = v_moon_fb / (norm(v_moon_fb) + 1e-30)
+                rot = np.cross(v_inf_dir, v_moon_dir)
+                if norm(rot) > 1e-12:
+                    rot = rot / norm(rot)
+                    cd, sd = np.cos(sgn * delta), np.sin(sgn * delta)
+                    v_out = (cd * v_inf_vec + sd * np.cross(rot, v_inf_vec) +
+                             (1 - cd) * np.dot(rot, v_inf_vec) * rot)
+                    best_traj[21:24] = v_moon_fb + v_out
+            except ValueError:
+                pass
+
+    # ── Phase 3: Heliocentric → Earth return with snapshots ──
+    flight_s = ell['T_years'] * 365.25 * DAY
+    n_helio = min(int(flight_s / dt), 500000)
+    snapshot_every = max(1, n_helio // 200)  # ~200 snapshots
+
+    snapshots = []
+    earth_closest = float('inf')
+    earth_time = 0.0
+    r_min = float('inf')
+    peri_time = 0.0
+    hit_sun = False
+    y = best_traj.copy() if best_traj is not None else y0.copy()
+
+    for step in range(n_helio):
+        try:
+            y = velocity_verlet_step(y, dt)
+        except RuntimeError:
+            break
+
+        r_sun = norm(y[18:21])
+        r_earth = norm(y[18:21] - y[6:9])
+
+        if r_sun < r_min:
+            r_min = r_sun
+            peri_time = best_moon_time + step * dt
+
+        if r_earth < earth_closest:
+            earth_closest = r_earth
+            earth_time = best_moon_time + step * dt
+
+        if r_sun < R_SUN:
+            hit_sun = True
+            break
+
+        if step % snapshot_every == 0 or step == n_helio - 1:
+            snapshots.append({
+                'step': step,
+                't_seconds': best_moon_time + step * dt,
+                't_days': (best_moon_time + step * dt) / DAY,
+                'rocket_x_km': float(y[18]), 'rocket_y_km': float(y[19]),
+                'rocket_z_km': float(y[20]),
+                'rocket_vx_kms': float(y[21]), 'rocket_vy_kms': float(y[22]),
+                'rocket_vz_kms': float(y[23]),
+                'earth_x_km': float(y[6]), 'earth_y_km': float(y[7]),
+                'earth_z_km': float(y[8]),
+                'moon_x_km': float(y[12]), 'moon_y_km': float(y[13]),
+                'moon_z_km': float(y[14]),
+                'r_sun_km': float(r_sun),
+                'r_earth_km': float(r_earth),
+            })
+
+    # ── Compute absolute times ──
+    launch_dt = _dt.strptime(date_str, '%Y-%m-%d')
+    moon_encounter_dt = launch_dt + _td(seconds=best_moon_time)
+    return_dt = launch_dt + _td(seconds=earth_time)
+
+    # ── Build summary ──
+    summary = {
+        'mission': {
+            'launch_date': date_str,
+            'target_r_p_au': r_p / AU,
+            'target_r_m_km': r_m,
+            'side': side,
+        },
+        'encounter_times': {
+            'launch_iso': launch_dt.isoformat() + 'Z',
+            'moon_closest_approach_iso': moon_encounter_dt.isoformat() + 'Z',
+            'moon_closest_approach_seconds': best_moon_time,
+            'earth_return_iso': return_dt.isoformat() + 'Z',
+            'earth_return_seconds': earth_time,
+            'perihelion_seconds': peri_time,
+        },
+        'miss_distances_km': {
+            'moon_closest': best_approach,
+            'earth_closest': earth_closest,
+        },
+        'perihelion_km': r_min,
+        'hit_sun': hit_sun,
+        'delta_v_kms': {
+            'launch': sol['Delta_v_launch'],
+            'lunar_residual': sol['Delta_v_lunar_residual'],
+            'reentry': sol['Delta_v_reentry'],
+            'total': sol['Delta_v_total'],
+            'total_nomoon': sol['Delta_v_total_nomoon'],
+            'saving_pct': sol['saving_pct'],
+        },
+        'closure_terms_kms': {
+            'em_closure': sol.get('em_closure', 0.0),
+            'flyby_deficit': sol.get('flyby_deficit', 0.0),
+            'helio_splice': sol.get('helio_splice', 0.0),
+            'return_rendezvous': sol.get('return_rendezvous', 0.0),
+        },
+        'constraints': {
+            'R15_moon_soi': bool(best_approach < R_MOON_SOI),
+            'R16_earth_return': bool(earth_closest < 0.02 * AU and not hit_sun),
+            'R18_physical': bool(r_min > R_SUN and not hit_sun and (
+                r_m is None or r_m >= R_MOON + 100)),
+        },
+        'moon_phase': {
+            'angle_deg': sol.get('moon_phase_angle_deg'),
+            'favorable': sol.get('moon_phase_ok', False),
+        },
+        'trajectory': snapshots,
+        'n_snapshots': len(snapshots),
+    }
+
+    # ── Output ──
+    print('=' * 60)
+    print('MISSION SUMMARY (Machine-Readable)')
+    print('=' * 60)
+    print(f'  Launch:        {date_str}')
+    print(f'  Moon approach: {moon_encounter_dt.isoformat()}  '
+          f'({best_moon_time/DAY:.2f} d after launch)')
+    print(f'  Closest Moon:  {best_approach:,.0f} km  '
+          f'({"SOI" if best_approach < R_MOON_SOI else "MISS"})')
+    print(f'  Perihelion:    {r_min:,.0f} km  ({r_min/AU:.4f} AU)')
+    print(f'  Earth return:  {return_dt.isoformat()}  '
+          f'({earth_time/DAY:.2f} d after launch)')
+    print(f'  Closest Earth: {earth_closest:,.0f} km')
+    print(f'  Δv_total:      {sol["Delta_v_total"]:.3f} km/s  '
+          f'(save {sol["saving_pct"]:.1f}% vs no-moon)')
+    print(f'  R15:{"PASS" if best_approach < R_MOON_SOI else "FAIL"}  '
+          f'R16:{"PASS" if earth_closest < 0.02 * AU else "FAIL"}  '
+          f'R18:{"PASS" if r_min > R_SUN else "FAIL"}')
+    print(f'  Snapshots:     {len(snapshots)} states saved')
+
+    if output_file:
+        os.makedirs(os.path.dirname(output_file) or '.', exist_ok=True)
+
+        class _NpEncoder(json.JSONEncoder):
+            def default(self, obj):
+                import numpy as _np
+                if isinstance(obj, (_np.integer,)):
+                    return int(obj)
+                if isinstance(obj, (_np.floating,)):
+                    return float(obj)
+                if isinstance(obj, (_np.bool_,)):
+                    return bool(obj)
+                if isinstance(obj, _np.ndarray):
+                    return obj.tolist()
+                return super().default(obj)
+
+        with open(output_file, 'w') as f:
+            json.dump(summary, f, indent=2, cls=_NpEncoder)
+        print(f'\n  Full trajectory saved to {output_file}')
+
+    return summary
+
+
 if __name__ == '__main__':
     result = solve_single_date(
         '2026-06-15', r_p=0.25 * AU, r_m=5000, side='trailing'
@@ -631,6 +877,6 @@ if __name__ == '__main__':
     r15 = 'PASS' if mission.get('rule15_pass') else 'FAIL'
     r16 = 'PASS' if mission.get('rule16_pass') else 'FAIL'
     r18 = 'PASS' if mission.get('perihelion_ok') else 'FAIL'
-    print(f'  Rule 15 (Moon SOI):    {r15}  (closest={mission.get("moon_closest_approach_km", "N/A")})')
-    print(f'  Rule 16 (Earth return): {r16}  (closest={mission.get("earth_closest_approach_km", "N/A")})')
-    print(f'  Rule 18 (perihelion):   {r18}  (r_min={mission.get("perihelion_km", "N/A")})')
+    solve_and_emit_trajectory(
+        '2026-01-07', 0.35 * AU, r_m=5000, side='trailing',
+        output_file='data/mission_summary.json')
