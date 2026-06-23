@@ -1,15 +1,15 @@
-PYTHON := $(CURDIR)/.venv/bin/python3
+PYTHON := python3
 SRC := $(CURDIR)/src
-XELATEX := $(HOME)/Library/TinyTeX/bin/universal-darwin/xelatex
+XELATEX := /usr/bin/xelatex
 
-.PHONY: all pdf clean test figures scan verify judge judge-dev sensitivity
+.PHONY: all pdf clean test figures scan verify judge judge-dev sensitivity animation
 
-all: test figures pdf
+all: test figures animation pdf
 
 pdf: report.tex
 	@if [ ! -x "$(XELATEX)" ]; then \
 		echo "xelatex not found at $(XELATEX)"; \
-		echo "Install: brew install --cask basictex"; \
+		echo "Try: which xelatex"; \
 		exit 1; \
 	fi
 	$(XELATEX) report.tex && $(XELATEX) report.tex && $(XELATEX) report.tex
@@ -19,6 +19,11 @@ figures:
 	@echo "Generating orbit plots..."
 	$(PYTHON) $(SRC)/visualize.py
 	@echo "Figures done."
+
+animation:
+	@echo "Generating orbit animation (MP4)..."
+	$(PYTHON) $(SRC)/o5_animation.py
+	@echo "Animation done."
 
 test:
 	@echo "=== M1: Patched Conic Validation ==="
@@ -48,5 +53,5 @@ sensitivity:
 
 clean:
 	rm -f report.pdf report.aux report.log report.out report.toc report.synctex.gz
-	rm -f data/*.png animation.mp4
+	rm -f data/*.png data/*.mp4
 	rm -rf src/__pycache__
